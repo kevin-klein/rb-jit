@@ -1,26 +1,23 @@
+require 'jit/values'
+
 module Jit
 
   class JitCompiler
 
     def initialize
-      mod = LLVM::Module.new(method_name.to_s)
+      @mod = LLVM::Module.new("rb-jit")
 
       # converts an int64 to a ruby value
-      rb_int2inum = mod.functions.add('rb_int2inum', [LLVM::Int64], value)
+      @rb_int2inum       = @mod.functions.add('rb_int2inum', [LLVM::Int64], VALUE)
       # probably 0 if unequal, else 1
       # the return value MIGHT BE Int32!?
-      rb_equal = mod.functions.add('rb_equal', [value, value], LLVM::Int64)
-      rb_funcallv = mod.functions.add('rb_funcallv', [value, LLVM::Int64, LLVM::Int64, LLVM::Pointer(value)], value)
-      rb_intern = mod.functions.add('rb_intern', [LLVM::Pointer(LLVM::Int8)], LLVM::Int64)
-      rb_ary_resurrect = mod.functions.add('rb_ary_resurrect', [LLVM::Int64], LLVM::Int64)
-
-      api = {
-        rb_int2inum: rb_int2inum,
-        rb_equal: rb_equal,
-        rb_funcallv: rb_funcallv,
-        rb_intern: rb_intern
-      }
+      @rb_equal          = @mod.functions.add('rb_equal', [VALUE, VALUE], LLVM::Int64)
+      @rb_funcallv       = @mod.functions.add('rb_funcallv', [VALUE, VALUE, LLVM::Int64, LLVM::Pointer(VALUE)], VALUE)
+      @rb_intern         = @mod.functions.add('rb_intern', [LLVM::Pointer(LLVM::Int8)], VALUE)
+      @rb_ary_resurrect  = @mod.functions.add('rb_ary_resurrect', [VALUE], VALUE)
     end
+
+    attr_reader :mod
 
     def jit(method)
       instructions = RubyVM::InstructionSequence.of(method)
@@ -61,7 +58,6 @@ module Jit
 
       ap bytecode
 
-      stack = []
       new_bytecode = BytecodeTransformer::transform(bytecode, locals)
 
       ap new_bytecode
