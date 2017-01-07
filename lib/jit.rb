@@ -1,8 +1,10 @@
 require "jit/version"
 
 require 'llvm/core'
+require 'llvm/analysis'
 require 'llvm/transforms/builder'
 require 'llvm/transforms/ipo'
+require "llvm/execution_engine"
 
 require 'jit/values'
 require 'jit/bytecode_transformer'

@@ -1,5 +1,7 @@
 require 'jit/values'
 
+require 'logger'
+
 module Jit
 
   class JitCompiler
@@ -15,6 +17,9 @@ module Jit
       @rb_funcallv       = @mod.functions.add('rb_funcallv', [VALUE, VALUE, LLVM::Int64, LLVM::Pointer(VALUE)], VALUE)
       @rb_intern         = @mod.functions.add('rb_intern', [LLVM::Pointer(LLVM::Int8)], VALUE)
       @rb_ary_resurrect  = @mod.functions.add('rb_ary_resurrect', [VALUE], VALUE)
+
+      @logger = Logger.new(STDOUT)
+      @logger.level = Logger::INFO
     end
 
     attr_reader :mod
@@ -56,14 +61,14 @@ module Jit
         end
       end
 
-      ap bytecode
+      @logger.info(bytecode.to_s)
 
-      new_bytecode = BytecodeTransformer::transform(bytecode, locals)
+      new_bytecode = BytecodeTransformer.new.transform(bytecode, locals)
 
-      ap new_bytecode
+      @logger.info(new_bytecode)
 
       # remove optional param resolution, we just wrap funcs at the moment
-      start_label = params[:opt].try(:last)
+      start_label = params[:opt]&.last
       if bytecode.include?(start_label)
         # also remove the default jump mark
         bytecode = bytecode.drop(bytecode.index(start_label) + 1)
@@ -75,7 +80,7 @@ module Jit
       local_llvm_vars = {}
       globals = {}
       blocks = {}
-      mod.functions.add(method_name.to_s, [value]*misc[:arg_size], LLVM::Int64) do |function, *args|
+      @mod.functions.add(method_name.to_s, [VALUE]*misc[:arg_size], LLVM::Int64) do |function, *args|
         entry = function.basic_blocks.append("entry")
         blocks[:entry] = entry
 
@@ -83,7 +88,7 @@ module Jit
 
         entry.build do |builder|
           locals.each do |local|
-            local_llvm_vars[local] = builder.alloca(value, name=local.to_s)
+            local_llvm_vars[local] = builder.alloca(VALUE, name=local.to_s)
           end
 
           param_names.each_with_index do |param, index|
@@ -102,7 +107,7 @@ module Jit
         builder = LLVM::Builder.new
         builder.position_at_end(last_block)
         new_bytecode.each do |code|
-          result = compile_code(code, mod, builder, function, local_llvm_vars, locals, api, globals, blocks, method_name.to_s)
+          result = compile_code(code, mod, builder, function, local_llvm_vars, locals, globals, blocks, method_name.to_s)
           if result.instance_of?(LLVM::BasicBlock)
             builder.dispose
             last_block = result
@@ -113,14 +118,14 @@ module Jit
         builder.dispose
 
       end
-      mod.dump
+      @mod.dump
       # raise
-      mod.verify!
+      @mod.verify!
 
       # raise
 
       LLVM.init_jit
-      engine = LLVM::JITCompiler.new(mod)
+      engine = LLVM::MCJITCompiler.new(@mod)
 
       # raise
 
@@ -134,7 +139,7 @@ module Jit
       # ap p.id
       # id = p.object_id << 1
       id = (p << 1) | 0x01
-      ap id
+      puts id
       # ap p.object_id
       # raise
       # id = 21
@@ -200,7 +205,7 @@ module Jit
         builder.icmp(:eq, LLVM::Int64.from_i(0x00), exp))
     end
 
-    def self.compile_code(code, mod, builder, function, local_llvm_vars, locals, api, globals, blocks, name)
+    def compile_code(code, mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
       if code.instance_of?(Array)
         if code.first == :setlocal_OP__WC__0
           name = code[1]
@@ -243,25 +248,15 @@ module Jit
                 var.initializer = LLVM::ConstantArray.string(f_name.to_s)
               end
             end
-
+            call_self = compile_code(code.last[:args][0], mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
 
             name_pointer = builder.gep(globals[f_name], [LLVM::Int(0), LLVM::Int(0)])
-            id = builder.call(api[:rb_intern], name_pointer)
+            id = builder.call(@rb_intern, name_pointer)
 
-            builder.call(api[:rb_funcallv], call_self, id, LLVM::Int64.from_i(code[1][:orig_argc]), args)
+            args = build_args(code, mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
+
+            builder.call(@rb_funcallv, call_self, id, LLVM::Int64.from_i(code[1][:orig_argc]), args)
           end
-        # elsif code.first == :opt_eq
-        #   op1_pointer = builder.gep(stack, [LLVM::Int(0), builder.load(sp)])
-        #   dec_stack(builder, sp)
-        #
-        #   op2_pointer = builder.gep(stack, [LLVM::Int(0), builder.load(sp)])
-        #   dec_stack(builder, sp)
-        #
-        #   eql_result = builder.call(api[:rb_equal], builder.load(op1_pointer), builder.load(op2_pointer))
-        #
-        #   inc_stack(builder, sp)
-        #   pointer = builder.gep(stack, [LLVM::Int(0), builder.load(sp)])
-        #   builder.store(eql_result, pointer)
         elsif code.first == :putobject
           if code.last.instance_of?(Fixnum)
             # builder.call(api[:rb_int2inum], LLVM::Int64.from_i(code.last))
@@ -273,7 +268,7 @@ module Jit
             raise
           end
         elsif code.first == :leave
-          builder.ret(compile_code(code.last[:args], mod, builder, function, local_llvm_vars, locals, api, globals, blocks, name))
+          builder.ret(compile_code(code.last[:args], mod, builder, function, local_llvm_vars, locals, globals, blocks, name))
         else
           ap code
           raise
@@ -284,16 +279,16 @@ module Jit
       end
     end
 
-    def build_args(code, builder)
+    def build_args(code, mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
       size = code[1][:orig_argc]
       args = builder.array_alloca(LLVM::Int64, LLVM::Int64.from_i(size))
 
-      call_self = compile_code(code.last[:args][0], mod, builder, function, local_llvm_vars, locals, api, globals, blocks, name)
-
       (1..code[1][:orig_argc]).each do |i|
-        arg = compile_code(code.last[:args][i], mod, builder, function, local_llvm_vars, locals, api, globals, blocks, name)
+        arg = compile_code(code.last[:args][i], mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
         builder.store(arg, builder.gep(args, [LLVM::Int(i - 1)]))
       end
+
+      args
     end
 
   end
