@@ -1,6 +1,15 @@
 require 'jit/values'
 
+require "awesome_print"
+
 require 'logger'
+require 'ffi'
+
+module RubyLib
+  extend FFI::Library
+  ffi_lib 'libruby.so'
+  attach_function :rb_intern, [:string], :int
+end
 
 module Jit
 
@@ -15,11 +24,23 @@ module Jit
       # the return value MIGHT BE Int32!?
       @rb_equal          = @mod.functions.add('rb_equal', [VALUE, VALUE], LLVM::Int64)
       @rb_funcallv       = @mod.functions.add('rb_funcallv', [VALUE, VALUE, LLVM::Int64, LLVM::Pointer(VALUE)], VALUE)
-      @rb_intern         = @mod.functions.add('rb_intern', [LLVM::Pointer(LLVM::Int8)], VALUE)
+      # @rb_intern         = @mod.functions.add('rb_intern', [LLVM::Pointer(LLVM::Int8)], VALUE)
       @rb_ary_resurrect  = @mod.functions.add('rb_ary_resurrect', [VALUE], VALUE)
+      @opt_plus          = @mod.functions.add('opt_plus', [VALUE, VALUE], VALUE)
+      @opt_gt            = @mod.functions.add('opt_gt', [VALUE, VALUE], VALUE)
 
       @logger = Logger.new(STDOUT)
       @logger.level = Logger::INFO
+
+
+      @builder = LLVM::PassManagerBuilder.new
+      @builder.opt_level = 3
+
+      LLVM.init_jit
+      @engine = LLVM::JITCompiler.new(@mod)
+
+      @pass_manager  = LLVM::PassManager.new(@engine)
+      @builder.build(@pass_manager)
     end
 
     attr_reader :mod
@@ -61,11 +82,13 @@ module Jit
         end
       end
 
-      @logger.info(bytecode.to_s)
+      # @logger.info(bytecode.to_s)
+      ap bytecode
 
       new_bytecode = BytecodeTransformer.new.transform(bytecode, locals)
 
-      @logger.info(new_bytecode)
+      # @logger.info(new_bytecode)
+      ap new_bytecode
 
       # remove optional param resolution, we just wrap funcs at the moment
       start_label = params[:opt]&.last
@@ -119,72 +142,79 @@ module Jit
 
       end
       @mod.dump
-      # raise
       @mod.verify!
 
+      @pass_manager.run(@mod)
+      @mod.dump
+
+      cls = method.owner
+
+      e = @engine
+      func = @mod.functions[method_name.to_s]
+      cls.class_eval do
+        define_method("jit_#{method_name}") do |*args|
+          args = args.map do |arg|
+            ArgSerializer.serialize(arg)
+          end
+
+          result = e.run_function(func, ArgSerializer.serialize(self), *args).to_i
+          ArgSerializer.deserialize(result)
+        end
+      end
+
       # raise
 
-      LLVM.init_jit
-      engine = LLVM::MCJITCompiler.new(@mod)
-
       # raise
 
-      p = 3500
+      # p = 3500
       # result = engine.run_function(mod.functions[method_name], p.object_id)
 
-      puts 'normal'
-      # p = Page.new
-      # p = 21
-      # p = Page.new(id: 0)
-      # ap p.id
-      # id = p.object_id << 1
-      id = (p << 1) | 0x01
-      puts id
-      # ap p.object_id
-      # raise
-      # id = 21
-      # ap test(p)
-      page = Page.new
-      page_id = page.object_id << 1
-      # ap page_id
-      func = mod.functions[method_name]
-      # ap engine.run_function(func, page_id, id).to_i
-      # raise
-      # ap (10 << 1) | 0x01
-      # ap ObjectSpace._id2ref(engine.run_function(func, page_id, id).to_i)
-      # raise
-      puts Benchmark.realtime {
-        # ap p.object_id
-        # ap p
-        1000.times { engine.run_function(func, page_id, id) }
-      }
+      # puts 'normal'
+      # # p = Page.new
+      # # p = 21
+      # # p = Page.new(id: 0)
+      # # ap p.id
+      # # id = p.object_id << 1
+      # id = (p << 1) | 0x01
+      # puts id
+      # # ap p.object_id
+      # # raise
+      # # id = 21
+      # # ap test(p)
+      # page = Page.new
+      # page_id = page.object_id << 1
+      # # ap page_id
+      # func = mod.functions[method_name]
+      # # ap engine.run_function(func, page_id, id).to_i
+      # # raise
+      # # ap (10 << 1) | 0x01
+      # # ap ObjectSpace._id2ref(engine.run_function(func, page_id, id).to_i)
+      # # raise
+      # puts Benchmark.realtime {
+      #   # ap p.object_id
+      #   # ap p
+      #   1000.times { engine.run_function(func, page_id, id) }
+      # }
 
       # raise
 
       # raise
-
-      builder = LLVM::PassManagerBuilder.new
-      builder.opt_level = 3
-
-      passm  = LLVM::PassManager.new(engine)
-      builder.build(passm)
-      passm.run(mod)
-
-      mod.dump
-
-      puts 'optimized'
-      func = mod.functions[method_name]
-      puts Benchmark.realtime {
-        1000.times { engine.run_function(func, page_id, id) }
-      }
-
-      puts 'ruby'
-      page = Page.new
-      puts Benchmark.realtime {
-        1000.times { page.test(p) }
-      }
-
-      engine.dispose
+      #
+      # @mod.dump
+      #
+      # puts 'optimized'
+      # func = mod.functions[method_name]
+      # puts Benchmark.realtime {
+      #   1000.times { engine.run_function(func, page_id, id) }
+      # }
+      #
+      # puts 'ruby'
+      # page = Page.new
+      # puts Benchmark.realtime {
+      #   1000.times { page.test(p) }
+      # }
+      #
+      # engine.dispose
 
       # int_result = result.to_i
       # if int_result == 0x14
@@ -194,15 +224,16 @@ module Jit
       # else
       #   ObjectSpace._id2ref(int_result)
       # end
+
     end
 
-    def self.compare_truthy(exp, builder)
+    def compare_truthy(exp, builder)
       # 0x08 nil
       # 0x00 false
       # only nil and false are false
       builder.and(
-        builder.icmp(:eq, LLVM::Int64.from_i(0x08), exp),
-        builder.icmp(:eq, LLVM::Int64.from_i(0x00), exp))
+        builder.icmp(:ne, LLVM::Int64.from_i(0x08), exp),
+        builder.icmp(:ne, LLVM::Int64.from_i(0x00), exp))
     end
 
     def compile_code(code, mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
@@ -211,47 +242,66 @@ module Jit
           name = code[1]
           local_var = local_llvm_vars[name]
           arg = code.last[:args]
-          arg = compile_code(arg, mod, builder, function, local_llvm_vars, locals, api, globals, blocks, name)
+          arg = compile_code(arg, mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
           builder.store(arg, local_var)
+        elsif code.first == :jump
+          ap code
+          jump = blocks[code[1]]
+          builder.br(jump)
         elsif code.first == :branchunless
           arg = code.last[:args]
-          arg = compile_code(arg, mod, builder, function, local_llvm_vars, locals, api, globals, blocks, name)
+          arg = compile_code(arg, mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
 
           truthy = compare_truthy(arg, builder)
           jump1 = blocks[code[1]]
           jump2 = blocks[code[2]]
 
-          if jump1.nil?
-            raise
-          elsif jump2.nil?
-            raise
-          end
-
           builder.cond(truthy, jump2, jump1)
+        elsif code.first == :branchif
+          arg = code.last[:args]
+          arg = compile_code(arg, mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
+
+          truthy = compare_truthy(arg, builder)
+          jump1 = blocks[code[1]]
+          jump2 = blocks[code[2]]
+
+          builder.cond(truthy, jump1, jump2)
         elsif code.first == :getlocal_OP__WC__0
           local_var = local_llvm_vars[code[1]]
           builder.load(local_var)
         elsif code.first == :putself
           local_var = local_llvm_vars['self']
           builder.load(local_var)
+        elsif code.first == :opt_plus
+          call_self = compile_code(code.last[:args][0], mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
+          arg = compile_code(code.last[:args][1], mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
+
+          builder.call(@opt_plus, call_self, arg)
+        elsif code.first == :opt_gt
+          call_self = compile_code(code.last[:args][0], mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
+          arg = compile_code(code.last[:args][1], mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
+
+          builder.call(@opt_gt, call_self, arg)
         elsif code[1] && code[1].instance_of?(Hash) && code[1][:mid]
           f_name = code[1][:mid]
           if f_name.to_s == name
             # set local vars and jump to entry
             raise
           else
-            unless globals[f_name]
-              globals[f_name] = mod.globals.add(LLVM::ConstantArray.string(f_name.to_s), f_name) do |var|
-                var.linkage = :private
-                var.global_constant = true
-                var.unnamed_addr = true
-                var.initializer = LLVM::ConstantArray.string(f_name.to_s)
-              end
-            end
+            # unless globals[f_name]
+            #   globals[f_name] = mod.globals.add(LLVM::ConstantArray.string(f_name.to_s), f_name) do |var|
+            #     var.linkage = :private
+            #     var.global_constant = true
+            #     var.unnamed_addr = true
+            #     var.initializer = LLVM::ConstantArray.string(f_name.to_s)
+            #   end
+            # end
+
+            # name_pointer = builder.gep(globals[f_name], [LLVM::Int(0), LLVM::Int(0)])
+            # id = builder.call(@rb_intern, name_pointer)
             call_self = compile_code(code.last[:args][0], mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
 
-            name_pointer = builder.gep(globals[f_name], [LLVM::Int(0), LLVM::Int(0)])
-            id = builder.call(@rb_intern, name_pointer)
+            id = LLVM::Int64.from_i(RubyLib.rb_intern(f_name.to_s))
 
             args = build_args(code, mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
 
@@ -267,10 +317,12 @@ module Jit
             ap code
             raise
           end
+        elsif code.first == :putnil
+          LLVM::Int64.from_i(QNIL)
         elsif code.first == :leave
           builder.ret(compile_code(code.last[:args], mod, builder, function, local_llvm_vars, locals, globals, blocks, name))
         else
-          ap code
+          puts code
           raise
         end
       else

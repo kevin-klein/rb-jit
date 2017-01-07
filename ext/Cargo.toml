@@ -1,0 +1,12 @@
+[package]
+name = "ext"
+version = "0.1.0"
+authors = ["kevin <kevin@tabolo.de>"]
+
+[dependencies]
+ruby-sys = "0.2.20"
+libc = "0.2.0"
+
+
+[lib]
+crate-type = ["dylib"]

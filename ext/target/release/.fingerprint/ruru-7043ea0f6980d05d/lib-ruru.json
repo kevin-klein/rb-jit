@@ -1,0 +1,1 @@
+{"rustc":16218068117412374134,"target":1465640696230723372,"profile":2761435531286440798,"local":{"variant":"Precalculated","fields":["0.9.2"]},"features":"None","deps":[["lazy_static v0.2.2",1544309868851501874],["ruby-sys v0.2.20",6913843860156329777]],"rustflags":[]}

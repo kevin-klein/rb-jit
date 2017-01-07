@@ -22,7 +22,7 @@ module Jit
           elsif code.first == :setlocal_OP__WC__0
             code[-1] = NameResolver::resolve_local_var(code.last, locals)
             new_bytecode << code + [{args: stack.pop}]
-          elsif [:branchunless, :leave].include?(code.first)
+          elsif [:branchunless, :leave, :branchif].include?(code.first)
             new_bytecode << code + [{args: stack.pop}]
           elsif code.first == :jump
             new_bytecode << code
@@ -54,7 +54,8 @@ module Jit
         end
       end
 
-      fix_double_labels(new_bytecode)
+      new_bytecode = fix_double_labels(new_bytecode)
+      fix_missing_jumps(new_bytecode)
     end
 
     private
@@ -86,6 +87,17 @@ module Jit
       false
     end
 
+    def fix_missing_jumps(bytecode)
+      new_bytecode = []
+      bytecode.each_with_index do |code, i|
+        new_bytecode << code
+        if code.instance_of?(Array) && (![:jump, :branchif, :branchunless].include?(code.first)) && bytecode[i+1].instance_of?(Symbol)
+          new_bytecode << [:jump, bytecode[i+1]]
+        end
+      end
+      new_bytecode
+    end
+
     def remove_empty_labels(bytecode)
       # fix leave, insert return when next op is leave
       new_bytecode = []
@@ -108,7 +120,7 @@ module Jit
       count = 1
       bytecode.each do |code|
         new_bytecode << code
-        if code.instance_of?(Array) && code.first == :branchunless
+        if code.instance_of?(Array) && [:branchunless, :branchif].include?(code.first)
           symbol = "branch_fix_#{count}".to_sym
           new_bytecode << symbol
           code[2] = symbol
@@ -134,9 +146,9 @@ module Jit
         if code.instance_of?(Array)
           if code.first == :jump && rewrite[code[1]]
             code[1] = rewrite[code[1]]
-          elsif code.first == :branchunless && rewrite[code[1]]
+          elsif [:branchunless, :branchif].include?(code.first) && rewrite[code[1]]
             code[1] = rewrite[code[1]]
-          elsif code.first == :branchunless && rewrite[code[2]]
+          elsif [:branchunless, :branchif].include?(code.first) && rewrite[code[2]]
             code[2] = rewrite[code[2]]
           end
         end

@@ -1,0 +1,2 @@
+cargo:rustc-link-search=/home/kevin/.rvm/rubies/ruby-2.3.3/lib
+cargo:rustc-link-lib=dylib=ruby
