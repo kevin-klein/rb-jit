@@ -24,9 +24,13 @@ module Jit
       # the return value MIGHT BE Int32!?
       @rb_equal          = @mod.functions.add('rb_equal', [VALUE, VALUE], LLVM::Int64)
       @rb_funcallv       = @mod.functions.add('rb_funcallv', [VALUE, VALUE, LLVM::Int64, LLVM::Pointer(VALUE)], VALUE)
-      # @rb_intern         = @mod.functions.add('rb_intern', [LLVM::Pointer(LLVM::Int8)], VALUE)
+      @rb_obj_as_string  = @mod.functions.add('rb_obj_as_string', [VALUE], VALUE)
       @rb_ary_resurrect  = @mod.functions.add('rb_ary_resurrect', [VALUE], VALUE)
       @opt_plus          = @mod.functions.add('opt_plus', [VALUE, VALUE], VALUE)
+      @opt_minus         = @mod.functions.add('opt_minus', [VALUE, VALUE], VALUE)
+      @opt_mult          = @mod.functions.add('opt_mult', [VALUE, VALUE], VALUE)
+      @opt_div           = @mod.functions.add('opt_div', [VALUE, VALUE], VALUE)
+
       @opt_gt            = @mod.functions.add('opt_gt', [VALUE, VALUE], VALUE)
 
       @logger = Logger.new(STDOUT)
@@ -141,11 +145,11 @@ module Jit
         builder.dispose
 
       end
-      @mod.dump
+      # @mod.dump
       @mod.verify!
 
       @pass_manager.run(@mod)
-      @mod.dump
+      # @mod.dump
 
       cls = method.owner
 
@@ -245,7 +249,6 @@ module Jit
           arg = compile_code(arg, mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
           builder.store(arg, local_var)
         elsif code.first == :jump
-          ap code
           jump = blocks[code[1]]
           builder.br(jump)
         elsif code.first == :branchunless
@@ -277,11 +280,28 @@ module Jit
           arg = compile_code(code.last[:args][1], mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
 
           builder.call(@opt_plus, call_self, arg)
+        elsif code.first == :opt_minus
+          call_self = compile_code(code.last[:args][0], mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
+          arg = compile_code(code.last[:args][1], mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
+
+          builder.call(@opt_minus, call_self, arg)
+        elsif code.first == :opt_div
+          call_self = compile_code(code.last[:args][0], mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
+          arg = compile_code(code.last[:args][1], mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
+
+          builder.call(@opt_div, call_self, arg)
+        elsif code.first == :opt_mult
+          call_self = compile_code(code.last[:args][0], mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
+          arg = compile_code(code.last[:args][1], mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
+
+          builder.call(@opt_mult, call_self, arg)
         elsif code.first == :opt_gt
           call_self = compile_code(code.last[:args][0], mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
           arg = compile_code(code.last[:args][1], mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
 
           builder.call(@opt_gt, call_self, arg)
+        elsif code.first == :concatstrings
+          
         elsif code[1] && code[1].instance_of?(Hash) && code[1][:mid]
           f_name = code[1][:mid]
           if f_name.to_s == name
@@ -322,7 +342,7 @@ module Jit
         elsif code.first == :leave
           builder.ret(compile_code(code.last[:args], mod, builder, function, local_llvm_vars, locals, globals, blocks, name))
         else
-          puts code
+          ap code
           raise
         end
       else

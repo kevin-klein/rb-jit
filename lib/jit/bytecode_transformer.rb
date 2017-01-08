@@ -30,6 +30,10 @@ module Jit
             stack << [:putobject, 1]
           elsif code.first == :putobject_OP_INT2FIX_O_0_C_
             stack << [:putobject, 0]
+          elsif code.first == :concatstrings
+            stack << code + [{args: [stack.pop, stack.pop]}]
+          elsif code.first == :tostring
+            stack << code + [{args: stack.pop}]
           elsif code.first == :dup
             result = stack.pop
             name = "__a#{SecureRandom.uuid}"
