@@ -95,7 +95,7 @@ module Jit
       new_bytecode = []
       bytecode.each_with_index do |code, i|
         new_bytecode << code
-        if code.instance_of?(Array) && (![:jump, :branchif, :branchunless].include?(code.first)) && bytecode[i+1].instance_of?(Symbol)
+        if code.instance_of?(Array) && (![:jump, :branchif, :branchunless, :leave].include?(code.first)) && bytecode[i+1].instance_of?(Symbol)
           new_bytecode << [:jump, bytecode[i+1]]
         end
       end

@@ -17,6 +17,14 @@ class Test
     "test_#{s}"
   end
 
+  def test_if(n)
+    if n > 10
+      10
+    else
+      3
+    end
+  end
+
 end
 
 describe Jit::JitCompiler do
@@ -34,6 +42,18 @@ describe Jit::JitCompiler do
 
   end
 
+  describe 'if' do
+
+    it 'compiles if' do
+      compiler.jit(Test.instance_method(:test_if))
+
+      t = Test.new
+
+      expect(t.test_if(10)).to eq(t.jit_test_if(10))
+    end
+
+  end
+
   describe 'basic compilation' do
 
     it 'compiles a basic function' do
@@ -42,7 +62,7 @@ describe Jit::JitCompiler do
       t = Test.new
 
       expect(t.jit_test(500000)).to eq(t.test(500000))
-  
+
       puts Benchmark.realtime {
         t.jit_test(500000)
       }
