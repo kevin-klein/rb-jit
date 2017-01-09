@@ -1,3 +1,5 @@
+require 'jit/ruby_lib'
+
 module ArgSerializer
   extend self
 
@@ -13,10 +15,10 @@ module ArgSerializer
   end
 
   def deserialize(arg)
-    if arg & INT_FLAG
+    if arg & INT_FLAG == 1
       (arg >> 1)
     else
-      ObjectSpace._id2ref(arg)
+      ObjectSpace._id2ref(arg >> 1)
     end
   end
 

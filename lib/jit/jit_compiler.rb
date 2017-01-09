@@ -1,15 +1,9 @@
 require 'jit/values'
+require 'jit/ruby_lib'
 
 require "awesome_print"
 
 require 'logger'
-require 'ffi'
-
-module RubyLib
-  extend FFI::Library
-  ffi_lib 'libruby.so'
-  attach_function :rb_intern, [:string], :int
-end
 
 module Jit
 
@@ -30,6 +24,7 @@ module Jit
       @opt_minus         = @mod.functions.add('opt_minus', [VALUE, VALUE], VALUE)
       @opt_mult          = @mod.functions.add('opt_mult', [VALUE, VALUE], VALUE)
       @opt_div           = @mod.functions.add('opt_div', [VALUE, VALUE], VALUE)
+      @concat_string_literals = @mod.functions.add('concat_string_literals', [LLVM::Int64, LLVM::Pointer(VALUE)], VALUE)
 
       @opt_gt            = @mod.functions.add('opt_gt', [VALUE, VALUE], VALUE)
 
@@ -87,12 +82,12 @@ module Jit
       end
 
       # @logger.info(bytecode.to_s)
-      ap bytecode
+      # ap bytecode
 
       new_bytecode = BytecodeTransformer.new.transform(bytecode, locals)
 
       # @logger.info(new_bytecode)
-      ap new_bytecode
+      # ap new_bytecode
 
       # remove optional param resolution, we just wrap funcs at the moment
       start_label = params[:opt]&.last
@@ -145,11 +140,11 @@ module Jit
         builder.dispose
 
       end
-      # @mod.dump
+      @mod.dump
       @mod.verify!
 
       @pass_manager.run(@mod)
-      # @mod.dump
+      @mod.dump
 
       cls = method.owner
 
@@ -260,6 +255,11 @@ module Jit
           jump2 = blocks[code[2]]
 
           builder.cond(truthy, jump2, jump1)
+        elsif code.first == :tostring
+          arg = code.last[:args]
+          arg = compile_code(arg, mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
+
+          builder.call(@rb_obj_as_string, arg)
         elsif code.first == :branchif
           arg = code.last[:args]
           arg = compile_code(arg, mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
@@ -301,7 +301,15 @@ module Jit
 
           builder.call(@opt_gt, call_self, arg)
         elsif code.first == :concatstrings
-          
+          args = builder.array_alloca(LLVM::Int64, LLVM::Int64.from_i(code[1]))
+
+          args_count = code[1]-1
+          (0..args_count).each do |i|
+            arg = compile_code(code.last[:args][i], mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
+            builder.store(arg, builder.gep(args, [LLVM::Int(args_count-i)]))
+          end
+
+          builder.call(@concat_string_literals, LLVM::Int64.from_i(code[1]), args)
         elsif code[1] && code[1].instance_of?(Hash) && code[1][:mid]
           f_name = code[1][:mid]
           if f_name.to_s == name
@@ -329,10 +337,11 @@ module Jit
           end
         elsif code.first == :putobject
           if code.last.instance_of?(Fixnum)
-            # builder.call(api[:rb_int2inum], LLVM::Int64.from_i(code.last))
             LLVM::Int64.from_i((code.last << 1) | 0x01)
           elsif code.last == false
             LLVM::Int64.from_i(0)
+          elsif code.last.instance_of?(String)
+            LLVM::Int64.from_i(ArgSerializer.serialize(code.last))
           else
             ap code
             raise
@@ -351,11 +360,11 @@ module Jit
       end
     end
 
-    def build_args(code, mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
+    def build_args(code, mod, builder, function, local_llvm_vars, locals, globals, blocks, name, start: 1)
       size = code[1][:orig_argc]
       args = builder.array_alloca(LLVM::Int64, LLVM::Int64.from_i(size))
 
-      (1..code[1][:orig_argc]).each do |i|
+      (start..code[1][:orig_argc]).each do |i|
         arg = compile_code(code.last[:args][i], mod, builder, function, local_llvm_vars, locals, globals, blocks, name)
         builder.store(arg, builder.gep(args, [LLVM::Int(i - 1)]))
       end

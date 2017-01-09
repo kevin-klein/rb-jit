@@ -5,7 +5,7 @@ use std::ffi::{CString, CStr};
 use ruby_sys::value::{RubySpecialConsts, RubySpecialFlags};
 use ruby_sys::float;
 use ruby_sys::types::Value;
-use libc::{c_char};
+use libc::{c_char, c_long};
 
 pub fn rb_float_new(i: f64) -> i64 {
     let result = unsafe { float::rb_float_new(i) };
@@ -37,8 +37,9 @@ extern "C" {
     pub fn rb_funcallv(receiver: i64, method: i64, argc: i64, argv: *const i64) -> i64;
     pub fn rb_intern(name: *const c_char) -> i64;
     pub fn rb_str_resurrect(s: i64) -> i64;
-    pub fn rb_str_new(s: *const c_char, len: i64) -> i64;
+    pub fn rb_str_new(s: *const c_char, len: c_long) -> i64;
     pub fn rb_string_value_cstr(s: *const i64) -> *const c_char;
+    pub fn rb_str_new_cstr(s: *const c_char) -> i64;
 }
 
 fn str_to_cstring(str: &str) -> CString {
@@ -146,9 +147,10 @@ pub extern fn concat_string_literals(num: i64, args: *const i64) -> i64 {
     let mut result = String::new();
     for i in 0..num {
         let str_object = unsafe { *args.offset(i as isize) };
-        let s = unsafe { cstr_as_string(rb_string_value_cstr(&str_object)) };
+        let rb_string = unsafe { rb_string_value_cstr(&str_object) };
+        let s = cstr_as_string(rb_string);
         result.push_str(s.as_str());
     }
 
-    unsafe { rb_str_new(result.as_str().as_ptr() as *const c_char, result.len() as i64) }
+    unsafe { rb_str_new(result.as_ptr() as *const c_char, result.len() as c_long) }
 }
