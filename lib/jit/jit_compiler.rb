@@ -1,8 +1,6 @@
 require 'jit/values'
 require 'jit/ruby_lib'
 
-require "awesome_print"
-
 require 'logger'
 
 module Jit
@@ -14,7 +12,7 @@ module Jit
 
       # 0 if unequal, else 1
       @rb_equal          = @mod.functions.add('rb_equal', [VALUE, VALUE], LLVM::Int64)
-      # 
+      #
       @rb_funcallv       = @mod.functions.add('rb_funcallv', [VALUE, VALUE, LLVM::Int64, LLVM::Pointer(VALUE)], VALUE)
       @rb_obj_as_string  = @mod.functions.add('rb_obj_as_string', [VALUE], VALUE)
       @rb_ary_resurrect  = @mod.functions.add('rb_ary_resurrect', [VALUE], VALUE)
@@ -80,12 +78,12 @@ module Jit
       end
 
       # @logger.info(bytecode.to_s)
-      ap bytecode
+      # ap bytecode
 
       new_bytecode = BytecodeTransformer.new.transform(bytecode, locals)
 
       # @logger.info(new_bytecode)
-      ap new_bytecode
+      # ap new_bytecode
 
       # remove optional param resolution, we just wrap funcs at the moment
       start_label = params[:opt]&.last
